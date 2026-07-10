@@ -25,7 +25,8 @@ use open_path_prompt::{
 };
 use picker::{Picker, PickerDelegate};
 use project::{
-    PathMatchCandidateSet, Project, ProjectPath, WorktreeId, worktree_store::WorktreeStore,
+    PathMatchCandidateSet, Project, ProjectPath, WorktreeId, WorktreeSettings,
+    worktree_store::WorktreeStore,
 };
 use project_panel::project_panel_settings::ProjectPanelSettings;
 use settings::Settings;
@@ -1037,12 +1038,21 @@ impl FileFinderDelegate {
             .visible_worktrees_and_single_files(cx)
             .collect::<Vec<_>>();
         let include_root_name = !should_hide_root_in_entry_path(&worktree_store, cx);
+        let mut search_exclusion_settings: HashMap<WorktreeId, WorktreeSettings> =
+            HashMap::default();
         let candidate_sets = worktrees
             .into_iter()
             .map(|worktree| {
                 let worktree = worktree.read(cx);
+                let snapshot = worktree.snapshot();
+                if let Some(local) = worktree.as_local() {
+                    let settings = local.settings();
+                    if settings.file_search_exclusions.sources().next().is_some() {
+                        search_exclusion_settings.insert(snapshot.id(), settings);
+                    }
+                }
                 PathMatchCandidateSet {
-                    snapshot: worktree.snapshot(),
+                    snapshot,
                     include_ignored: self.include_ignored.unwrap_or_else(|| {
                         worktree.root_entry().is_some_and(|entry| entry.is_ignored)
                     }),
@@ -1068,6 +1078,11 @@ impl FileFinderDelegate {
             )
             .await
             .into_iter()
+            .filter(|path_match| {
+                !search_exclusion_settings
+                    .get(&WorktreeId::from_usize(path_match.worktree_id))
+                    .is_some_and(|settings| settings.is_path_search_excluded(&path_match.path))
+            })
             .map(ProjectPanelOrdMatch);
             let did_cancel = cancel_flag.load(atomic::Ordering::Acquire);
             picker

@@ -2109,6 +2109,30 @@ The result is still `)))` and not `))))))`, which is what it would be by default
 
 Note, specifying `file_scan_exclusions` in settings.json will override the defaults (shown above). If you are looking to exclude additional items you will need to include all the default values in your settings.
 
+## File Search Exclusions
+
+- Setting: `file_search_exclusions`
+- Description: Files or globs of files that will be excluded from project-wide text search (Find in Files) and the file finder (Cmd-P), while remaining scanned, visible in the project tree, and available to language servers and git. Unlike `file_scan_exclusions`, matching files are not removed from the project. A directory glob excludes its entire subtree. An Include glob typed into the search bar overrides this setting for matching paths, and recently opened excluded files still appear in file-finder history.
+- Default:
+
+```json [settings]
+{
+  "file_search_exclusions": []
+}
+```
+
+This is the search-only counterpart to `file_scan_exclusions`, which removes matching files from the project entirely (project tree, search, language servers, git). Use `file_search_exclusions` to keep large generated or vendored directories (`**/node_modules`, `**/target`) browsable in the tree and available to language servers without polluting search results or Cmd-P. It is also distinct from `hidden_files`, which hides files in the project panel but does not affect search.
+
+Example:
+
+```json [settings]
+{
+  "file_search_exclusions": ["**/node_modules", "**/target", "**/dist"]
+}
+```
+
+To occasionally search an excluded path, type an Include glob into the search bar's Include field; it overrides this setting for matching paths.
+
 ## File Scan Inclusions
 
 - Setting: `file_scan_inclusions`

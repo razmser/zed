@@ -3680,7 +3680,7 @@ fn search_and_files_page() -> SettingsPage {
         ]
     }
 
-    fn file_scan_section() -> [SettingsPageItem; 6] {
+    fn file_scan_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader("File Scan"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -3699,6 +3699,29 @@ fn search_and_files_page() -> SettingsPage {
                         },
                         write: |settings_content, value, _| {
                             settings_content.project.worktree.file_scan_exclusions = value;
+                        },
+                    }
+                    .unimplemented(),
+                ),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "File Search Exclusions",
+                description: "Files or globs of files that will be excluded from project-wide text search and the file finder, while remaining scanned, visible in the project tree, and available to language servers and git. Unlike \"File Scan Exclusions\", matching files are not removed from the project. An Include glob typed into the search bar overrides this setting for matching paths",
+                field: Box::new(
+                    SettingField {
+                        organization_override: None,
+                        json_path: Some("file_search_exclusions"),
+                        pick: |settings_content| {
+                            settings_content
+                                .project
+                                .worktree
+                                .file_search_exclusions
+                                .as_ref()
+                        },
+                        write: |settings_content, value, _| {
+                            settings_content.project.worktree.file_search_exclusions = value;
                         },
                     }
                     .unimplemented(),

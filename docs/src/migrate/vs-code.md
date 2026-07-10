@@ -92,6 +92,7 @@ The following VS Code settings are automatically imported when you use **Import 
 | `files.simpleDialog.enable` | `use_system_path_prompts`      |
 | `search.smartCase`          | `use_smartcase_search`         |
 | `search.useIgnoreFiles`     | `search.include_ignored`       |
+| `search.exclude`            | `file_search_exclusions`       |
 
 **Terminal**
 

@@ -1092,6 +1092,21 @@ impl VsCodeSettings {
                         .collect::<Vec<_>>()
                 })
                 .filter(|r| !r.is_empty()),
+            file_search_exclusions: self
+                .read_value("search.exclude")
+                .and_then(|v| v.as_object())
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|(k, v)| {
+                            if v.as_bool().unwrap_or(false) {
+                                Some(k.to_owned())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .filter(|r| !r.is_empty()),
             file_scan_inclusions: self
                 .read_value("files.watcherInclude")
                 .and_then(|v| v.as_array())

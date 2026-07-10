@@ -2582,6 +2582,164 @@ async fn test_non_project_file_matches_history_with_hidden_root(cx: &mut gpui::T
 }
 
 #[gpui::test]
+async fn test_file_search_exclusions_filter_fuzzy_results(cx: &mut gpui::TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(
+            path!("/test"),
+            json!({
+                "src": { "find.rs": "" },
+                "find.txt": "",
+                "target": { "debug": { "find.rs": "" } },
+                "vendor": { "find.rs": "" },
+            }),
+        )
+        .await;
+    let project = Project::test(app_state.fs.clone(), [path!("/test").as_ref()], cx).await;
+    let (picker, _workspace, cx) = build_find_picker(project, cx);
+
+    fn sorted_search(picker: &Picker<FileFinderDelegate>) -> Vec<String> {
+        let mut paths: Vec<String> = collect_search_matches(picker)
+            .search
+            .iter()
+            .map(|path| path.display(PathStyle::local()).into_owned())
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    // With the setting unset, every matching file is offered.
+    picker
+        .update_in(cx, |picker, window, cx| {
+            picker
+                .delegate
+                .spawn_search(test_path_position("find"), window, cx)
+        })
+        .await;
+    picker.update(cx, |picker, _| {
+        let mut expected = vec![
+            "test/find.txt".to_string(),
+            "test/src/find.rs".to_string(),
+            "test/target/debug/find.rs".to_string(),
+            "test/vendor/find.rs".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(
+            sorted_search(picker),
+            expected,
+            "an unset setting leaves finder results unchanged"
+        );
+    });
+
+    // A directory glob excludes the whole subtree; siblings remain.
+    cx.update(|_, cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_search_exclusions =
+                    Some(vec!["target".to_string(), "vendor".to_string()]);
+            });
+        })
+    });
+    cx.run_until_parked();
+    picker
+        .update_in(cx, |picker, window, cx| {
+            picker
+                .delegate
+                .spawn_search(test_path_position("find"), window, cx)
+        })
+        .await;
+    picker.update(cx, |picker, _| {
+        let mut expected = vec!["test/find.txt".to_string(), "test/src/find.rs".to_string()];
+        expected.sort();
+        assert_eq!(
+            sorted_search(picker),
+            expected,
+            "search-excluded target/ and vendor/ subtrees are absent from fuzzy results"
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_file_search_exclusions_keep_history(cx: &mut gpui::TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(
+            path!("/test"),
+            json!({
+                "src": { "main.rs": "fn main() {}" },
+                "target": { "build.rs": "fn build() {}" },
+            }),
+        )
+        .await;
+
+    cx.update(|cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_search_exclusions =
+                    Some(vec!["target".to_string()]);
+            });
+        })
+    });
+
+    let project = Project::test(app_state.fs.clone(), [path!("/test").as_ref()], cx).await;
+    let (multi_workspace, cx) =
+        cx.add_window_view(|window, cx| MultiWorkspace::test_new(project, window, cx));
+    let workspace = multi_workspace.read_with(cx, |mw, _| mw.workspace().clone());
+
+    // Open the search-excluded file so it lands in recent navigation history.
+    workspace
+        .update_in(cx, |workspace, window, cx| {
+            workspace.open_abs_path(
+                PathBuf::from(path!("/test/target/build.rs")),
+                OpenOptions {
+                    visible: Some(OpenVisible::None),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    let finder = open_file_picker(&workspace, cx);
+    finder
+        .update_in(cx, |f, window, cx| {
+            f.delegate
+                .spawn_search(test_path_position("build"), window, cx)
+        })
+        .await;
+    cx.run_until_parked();
+
+    finder.update(cx, |f, _| {
+        let entries = collect_search_matches(f);
+        let search: Vec<String> = entries
+            .search
+            .iter()
+            .map(|path| path.display(PathStyle::local()).into_owned())
+            .collect();
+        let history: Vec<String> = entries
+            .history
+            .iter()
+            .map(|path| path.display(PathStyle::local()).into_owned())
+            .collect();
+        assert!(
+            !search.contains(&"test/target/build.rs".to_string()),
+            "search-excluded target/build.rs should not be a fuzzy match"
+        );
+        assert!(
+            history.contains(&"test/target/build.rs".to_string()),
+            "a recently opened search-excluded file should remain in finder history"
+        );
+    });
+}
+
+#[gpui::test]
 async fn test_single_file_search_result_split_open(cx: &mut gpui::TestAppContext) {
     let app_state = init_test(cx);
     app_state

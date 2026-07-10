@@ -8383,6 +8383,220 @@ async fn test_search_with_exclusions(cx: &mut gpui::TestAppContext) {
     );
 }
 
+fn set_file_search_exclusions(cx: &mut gpui::TestAppContext, globs: &[&str]) {
+    cx.update(|cx| {
+        SettingsStore::update_global(cx, |store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_search_exclusions =
+                    Some(globs.iter().map(|g| g.to_string()).collect());
+            });
+        });
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+async fn test_search_with_file_search_exclusions(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/dir"),
+        json!({
+            "src": { "main.rs": "needle" },
+            "target": { "debug": { "build.rs": "needle" } },
+            "vendor": { "lib.rs": "needle" },
+            "readme.md": "needle",
+        }),
+    )
+    .await;
+    let project = Project::test(fs.clone(), [path!("/dir").as_ref()], cx).await;
+
+    let query = |files_to_include: &[&str], files_to_exclude: &[&str]| {
+        SearchQuery::text(
+            "needle",
+            false,
+            true,
+            false,
+            PathMatcher::new(
+                files_to_include.iter().map(|s| s.to_string()),
+                PathStyle::local(),
+            )
+            .unwrap(),
+            PathMatcher::new(
+                files_to_exclude.iter().map(|s| s.to_string()),
+                PathStyle::local(),
+            )
+            .unwrap(),
+            false,
+            None,
+        )
+        .unwrap()
+    };
+
+    let all_results = || {
+        HashMap::from_iter([
+            (path!("dir/src/main.rs").to_string(), vec![0..6]),
+            (path!("dir/target/debug/build.rs").to_string(), vec![0..6]),
+            (path!("dir/vendor/lib.rs").to_string(), vec![0..6]),
+            (path!("dir/readme.md").to_string(), vec![0..6]),
+        ])
+    };
+
+    // With the setting unset, every file is searched (regression guard).
+    assert_eq!(
+        search(&project, query(&[], &[]), cx).await.unwrap(),
+        all_results(),
+        "an unset setting leaves search results unchanged"
+    );
+
+    // A directory glob in file_search_exclusions removes the whole subtree; siblings remain.
+    set_file_search_exclusions(cx, &["target", "vendor"]);
+    assert_eq!(
+        search(&project, query(&[], &[]), cx).await.unwrap(),
+        HashMap::from_iter([
+            (path!("dir/src/main.rs").to_string(), vec![0..6]),
+            (path!("dir/readme.md").to_string(), vec![0..6]),
+        ]),
+        "search-excluded target/ and vendor/ subtrees should be absent, siblings remain"
+    );
+
+    // An Include glob in the query overrides the setting for matching paths (escape hatch).
+    assert_eq!(
+        search(&project, query(&["target/**"], &[]), cx).await.unwrap(),
+        HashMap::from_iter([(path!("dir/target/debug/build.rs").to_string(), vec![0..6])]),
+        "a query Include restores a search-excluded path"
+    );
+
+    // A query Exclude still wins over a query Include on a restored path.
+    assert_eq!(
+        search(&project, query(&["target/**"], &["target/debug/**"]), cx)
+            .await
+            .unwrap(),
+        HashMap::default(),
+        "a query Exclude beats the Include escape hatch"
+    );
+
+    // A query Exclude also removes a path that the setting leaves untouched.
+    assert_eq!(
+        search(&project, query(&[], &["src/**"]), cx).await.unwrap(),
+        HashMap::from_iter([(path!("dir/readme.md").to_string(), vec![0..6])]),
+        "a query Exclude removes a path even with the setting in effect"
+    );
+
+    // Clearing the setting restores the original results.
+    set_file_search_exclusions(cx, &[]);
+    assert_eq!(
+        search(&project, query(&[], &[]), cx).await.unwrap(),
+        all_results(),
+        "an empty setting restores all results"
+    );
+}
+
+#[gpui::test]
+async fn test_search_scan_exclusion_supersedes_search_exclusion(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx);
+    // file_scan_exclusions is applied at scan time, so it must be set before the worktree is built.
+    cx.update(|cx| {
+        SettingsStore::update_global(cx, |store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_scan_exclusions =
+                    Some(vec!["target".to_string()]);
+                settings.project.worktree.file_search_exclusions =
+                    Some(vec!["vendor".to_string()]);
+            });
+        });
+    });
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/dir"),
+        json!({
+            "src": { "main.rs": "needle" },
+            "target": { "debug": { "build.rs": "needle" } },
+            "vendor": { "lib.rs": "needle" },
+            "readme.md": "needle",
+        }),
+    )
+    .await;
+    let project = Project::test(fs.clone(), [path!("/dir").as_ref()], cx).await;
+
+    // target is scan-excluded (never enters the snapshot, so it can appear nowhere),
+    // while vendor is only search-excluded. Either way both are absent from search.
+    assert_eq!(
+        search(
+            &project,
+            SearchQuery::text(
+                "needle",
+                false,
+                true,
+                false,
+                Default::default(),
+                Default::default(),
+                false,
+                None,
+            )
+            .unwrap(),
+            cx
+        )
+        .await
+        .unwrap(),
+        HashMap::from_iter([
+            (path!("dir/src/main.rs").to_string(), vec![0..6]),
+            (path!("dir/readme.md").to_string(), vec![0..6]),
+        ]),
+        "scan exclusion wins: target is absent everywhere, vendor is search-excluded"
+    );
+}
+
+#[gpui::test]
+async fn test_search_with_invalid_file_search_exclusions_glob(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        path!("/dir"),
+        json!({
+            "src": { "main.rs": "needle" },
+            "target": { "build.rs": "needle" },
+        }),
+    )
+    .await;
+    let project = Project::test(fs.clone(), [path!("/dir").as_ref()], cx).await;
+
+    // An invalid glob makes the whole matcher fall back to empty (logged + skipped), so search
+    // behaves as if no exclusions were configured: target is not excluded.
+    set_file_search_exclusions(cx, &["[unclosed", "target"]);
+    assert_eq!(
+        search(
+            &project,
+            SearchQuery::text(
+                "needle",
+                false,
+                true,
+                false,
+                Default::default(),
+                Default::default(),
+                false,
+                None,
+            )
+            .unwrap(),
+            cx
+        )
+        .await
+        .unwrap(),
+        HashMap::from_iter([
+            (path!("dir/src/main.rs").to_string(), vec![0..6]),
+            (path!("dir/target/build.rs").to_string(), vec![0..6]),
+        ]),
+        "an invalid glob is logged and skipped, so search still works"
+    );
+}
+
 #[gpui::test]
 async fn test_search_with_buffer_exclusions(cx: &mut gpui::TestAppContext) {
     init_test(cx);

@@ -136,6 +136,15 @@ pub struct WorktreeSettingsContent {
     /// ]
     pub file_scan_exclusions: Option<Vec<String>>,
 
+    /// Exclude files matching these globs from project-wide text search and the file finder,
+    /// while leaving them scanned, visible in the project tree, and available to language
+    /// servers and git. Unlike `file_scan_exclusions`, matching files remain part of the
+    /// worktree. An Include glob typed in the search bar overrides this setting for matching
+    /// paths, and recently opened excluded files still appear in file-finder history.
+    ///
+    /// Default: []
+    pub file_search_exclusions: Option<Vec<String>>,
+
     /// Always include files that match these globs when scanning for files, even if they're
     /// ignored by git. This setting is overridden by `file_scan_exclusions`.
     /// Default: [

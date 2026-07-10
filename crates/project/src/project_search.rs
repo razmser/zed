@@ -470,12 +470,22 @@ impl Search {
                         }
                         snapshot = worktree.read_with(cx, |this, _| this.snapshot());
                     }
+                    let query_has_includes = query.files_to_include().sources().next().is_some();
                     let tx = tx.clone();
                     let results = results.clone();
 
                     cx.background_executor()
                         .spawn(async move {
                             for entry in snapshot.files(include_ignored, 0) {
+                                // `file_search_exclusions` removes a path from search results, but
+                                // an explicit Include glob in the query overrides it. When the
+                                // query supplies includes, handle_scan_path's match_path is the
+                                // sole arbiter of what's searched, so the setting is bypassed.
+                                if !query_has_includes
+                                    && worktree_settings.is_path_search_excluded(&entry.path)
+                                {
+                                    continue;
+                                }
                                 let (should_scan_tx, should_scan_rx) = oneshot::channel();
 
                                 let Ok(_) = tx

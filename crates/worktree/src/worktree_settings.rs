@@ -13,6 +13,7 @@ pub struct WorktreeSettings {
     /// Whether to prevent this project from being shared in public channels.
     pub prevent_sharing_in_public_channels: bool,
     pub file_scan_exclusions: PathMatcher,
+    pub file_search_exclusions: PathMatcher,
     pub file_scan_inclusions: PathMatcher,
     /// This field contains all ancestors of the `file_scan_inclusions`. It's used to
     /// determine whether to terminate worktree scanning for a given dir.
@@ -32,6 +33,11 @@ impl WorktreeSettings {
     pub fn is_path_excluded(&self, path: &RelPath) -> bool {
         path.ancestors()
             .any(|ancestor| self.file_scan_exclusions.is_match(ancestor))
+    }
+
+    pub fn is_path_search_excluded(&self, path: &RelPath) -> bool {
+        path.ancestors()
+            .any(|ancestor| self.file_search_exclusions.is_match(ancestor))
     }
 
     pub fn is_path_always_included(&self, path: &RelPath, is_dir: bool) -> bool {
@@ -60,6 +66,7 @@ impl Settings for WorktreeSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let worktree = content.project.worktree.clone();
         let file_scan_exclusions = worktree.file_scan_exclusions.unwrap();
+        let file_search_exclusions = worktree.file_search_exclusions.unwrap_or_default();
         let file_scan_inclusions = worktree.file_scan_inclusions.unwrap();
         let private_files = worktree.private_files.unwrap().0;
         let hidden_files = worktree.hidden_files.unwrap();
@@ -79,6 +86,9 @@ impl Settings for WorktreeSettings {
         Self {
             prevent_sharing_in_public_channels: worktree.prevent_sharing_in_public_channels,
             file_scan_exclusions: path_matchers(file_scan_exclusions, "file_scan_exclusions")
+                .log_err()
+                .unwrap_or_default(),
+            file_search_exclusions: path_matchers(file_search_exclusions, "file_search_exclusions")
                 .log_err()
                 .unwrap_or_default(),
             parent_dir_scan_inclusions: path_matchers(

@@ -2605,6 +2605,43 @@ mod tests {
             .unindent(),
             cx,
         );
+
+        // VS Code search.exclude maps to file_search_exclusions (only true-valued globs).
+        check_vscode_import(
+            &mut store,
+            r#"{}"#.to_owned(),
+            r#"{ "search.exclude": { "node_modules": true, "dist": true, "**/old": false } }"#
+                .to_owned(),
+            r#"{
+              "base_keymap": "VSCode",
+              "minimap": {
+                "show": "always"
+              },
+              "file_search_exclusions": [
+                "node_modules",
+                "dist"
+              ]
+            }
+            "#
+            .unindent(),
+            cx,
+        );
+
+        // An absent search.exclude leaves file_search_exclusions unset.
+        check_vscode_import(
+            &mut store,
+            r#"{}"#.to_owned(),
+            r#"{}"#.to_owned(),
+            r#"{
+              "base_keymap": "VSCode",
+              "minimap": {
+                "show": "always"
+              }
+            }
+            "#
+            .unindent(),
+            cx,
+        );
     }
 
     #[track_caller]

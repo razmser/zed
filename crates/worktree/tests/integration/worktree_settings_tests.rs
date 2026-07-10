@@ -9,6 +9,7 @@ fn make_settings_with_read_only(patterns: &[&str]) -> WorktreeSettings {
     WorktreeSettings {
         prevent_sharing_in_public_channels: false,
         file_scan_exclusions: PathMatcher::default(),
+        file_search_exclusions: PathMatcher::default(),
         file_scan_inclusions: PathMatcher::default(),
         parent_dir_scan_inclusions: PathMatcher::default(),
         private_files: PathMatcher::default(),
