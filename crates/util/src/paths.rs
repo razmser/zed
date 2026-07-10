@@ -796,6 +796,23 @@ impl PathMatcher {
         self.sources.iter().map(|(source, ..)| source.as_str())
     }
 
+    pub fn is_empty(&self) -> bool {
+        // Not `sources.is_empty()`: globs that fail to parse as a `RelPath`
+        // (e.g. absolute paths) are dropped from `sources` but still live in
+        // the glob set.
+        self.glob.is_empty()
+    }
+
+    /// Like `is_match`, but also matches when any ancestor of the path
+    /// matches, so a glob that matches a directory covers its entire subtree.
+    pub fn matches_path_or_ancestor<P: AsRef<RelPath>>(&self, path: P) -> bool {
+        !self.is_empty()
+            && path
+                .as_ref()
+                .ancestors()
+                .any(|ancestor| self.is_match(ancestor))
+    }
+
     pub fn is_match<P: AsRef<RelPath>>(&self, other: P) -> bool {
         let other = other.as_ref();
         if self

@@ -29,7 +29,7 @@ use project::{
     worktree_store::WorktreeStore,
 };
 use project_panel::project_panel_settings::ProjectPanelSettings;
-use settings::Settings;
+use settings::{Settings, SettingsLocation};
 use std::{
     borrow::Cow,
     cmp,
@@ -1038,19 +1038,20 @@ impl FileFinderDelegate {
             .visible_worktrees_and_single_files(cx)
             .collect::<Vec<_>>();
         let include_root_name = !should_hide_root_in_entry_path(&worktree_store, cx);
-        let mut search_exclusion_settings: HashMap<WorktreeId, WorktreeSettings> =
-            HashMap::default();
         let candidate_sets = worktrees
             .into_iter()
             .map(|worktree| {
                 let worktree = worktree.read(cx);
                 let snapshot = worktree.snapshot();
-                if let Some(local) = worktree.as_local() {
-                    let settings = local.settings();
-                    if settings.file_search_exclusions.sources().next().is_some() {
-                        search_exclusion_settings.insert(snapshot.id(), settings);
-                    }
-                }
+                // Resolved via the settings store rather than the worktree so
+                // that remote (SSH, collab) worktrees are covered too.
+                let settings_location = SettingsLocation {
+                    worktree_id: snapshot.id(),
+                    path: RelPath::empty(),
+                };
+                let file_search_exclusions = WorktreeSettings::get(Some(settings_location), cx)
+                    .file_search_exclusions
+                    .clone();
                 PathMatchCandidateSet {
                     snapshot,
                     include_ignored: self.include_ignored.unwrap_or_else(|| {
@@ -1058,6 +1059,7 @@ impl FileFinderDelegate {
                     }),
                     include_root_name,
                     candidates: project::Candidates::Files,
+                    file_search_exclusions,
                 }
             })
             .collect::<Vec<_>>();
@@ -1078,11 +1080,6 @@ impl FileFinderDelegate {
             )
             .await
             .into_iter()
-            .filter(|path_match| {
-                !search_exclusion_settings
-                    .get(&WorktreeId::from_usize(path_match.worktree_id))
-                    .is_some_and(|settings| settings.is_path_search_excluded(&path_match.path))
-            })
             .map(ProjectPanelOrdMatch);
             let did_cancel = cancel_flag.load(atomic::Ordering::Acquire);
             picker

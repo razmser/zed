@@ -2662,6 +2662,60 @@ async fn test_file_search_exclusions_filter_fuzzy_results(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
+async fn test_file_search_exclusions_apply_before_result_cap(cx: &mut gpui::TestAppContext) {
+    let app_state = init_test(cx);
+    // More excluded files than the finder's 100-result cap, all scoring higher
+    // (shorter paths) than the one non-excluded match.
+    let mut noise = serde_json::Map::new();
+    for i in 0..150 {
+        noise.insert(format!("find{i:03}.rs"), json!(""));
+    }
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree(
+            path!("/test"),
+            json!({
+                "noise": noise,
+                "src": { "deeply": { "nested": { "find_this_one.rs": "" } } },
+            }),
+        )
+        .await;
+
+    cx.update(|cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_search_exclusions =
+                    Some(vec!["noise".to_string()]);
+            });
+        })
+    });
+
+    let project = Project::test(app_state.fs.clone(), [path!("/test").as_ref()], cx).await;
+    let (picker, _workspace, cx) = build_find_picker(project, cx);
+
+    picker
+        .update_in(cx, |picker, window, cx| {
+            picker
+                .delegate
+                .spawn_search(test_path_position("find"), window, cx)
+        })
+        .await;
+    picker.update(cx, |picker, _| {
+        let search: Vec<String> = collect_search_matches(picker)
+            .search
+            .iter()
+            .map(|path| path.display(PathStyle::local()).into_owned())
+            .collect();
+        assert_eq!(
+            search,
+            vec!["test/src/deeply/nested/find_this_one.rs".to_string()],
+            "excluded paths must not crowd non-excluded matches out of the capped result list"
+        );
+    });
+}
+
+#[gpui::test]
 async fn test_file_search_exclusions_keep_history(cx: &mut gpui::TestAppContext) {
     let app_state = init_test(cx);
     app_state

@@ -470,7 +470,7 @@ impl Search {
                         }
                         snapshot = worktree.read_with(cx, |this, _| this.snapshot());
                     }
-                    let query_has_includes = query.files_to_include().sources().next().is_some();
+                    let query_has_includes = !query.files_to_include().is_empty();
                     let tx = tx.clone();
                     let results = results.clone();
 
@@ -932,6 +932,14 @@ impl PathInclusionMatcher {
             return false;
         }
         if worktree_settings.is_path_excluded(&entry.path) {
+            return false;
+        }
+        // Files under a search-excluded directory are dropped from the
+        // candidate walk anyway (unless a query Include overrides the
+        // setting), so don't pay for scanning the directory either.
+        if self.query.files_to_include().is_empty()
+            && worktree_settings.is_path_search_excluded(&entry.path)
+        {
             return false;
         }
         if !self.query.filters_path() {

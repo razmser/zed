@@ -65,6 +65,11 @@ pub trait PathMatchCandidateSet<'a>: Send + Sync {
     fn root_is_file(&self) -> bool;
     fn prefix(&self) -> Arc<RelPath>;
     fn candidates(&'a self, start: usize) -> Self::Candidates;
+    /// Rejected candidates are dropped before scoring, so they never occupy
+    /// result slots that `max_results` truncation would otherwise give them.
+    fn include_candidate(&self, _candidate: &PathMatchCandidate<'a>) -> bool {
+        true
+    }
     fn path_style(&self) -> PathStyle;
 }
 
@@ -315,7 +320,10 @@ pub async fn match_path_sets<'a, Set: PathMatchCandidateSet<'a>>(
                         if tree_start < segment_end && segment_start < tree_end {
                             let start = tree_start.max(segment_start) - tree_start;
                             let end = tree_end.min(segment_end) - tree_start;
-                            let candidates = candidate_set.candidates(start).take(end - start);
+                            let candidates = candidate_set
+                                .candidates(start)
+                                .take(end - start)
+                                .filter(|candidate| candidate_set.include_candidate(candidate));
 
                             if path_match_helper(
                                 matcher,

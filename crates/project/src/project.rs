@@ -140,7 +140,7 @@ use toolchain_store::EmptyToolchainStore;
 use util::{
     ResultExt as _, maybe,
     path_list::PathList,
-    paths::{PathStyle, SanitizedPath, is_absolute},
+    paths::{PathMatcher, PathStyle, SanitizedPath, is_absolute},
     rel_path::RelPath,
 };
 use worktree::{CreatedEntry, Snapshot, Traversal};
@@ -6432,6 +6432,9 @@ pub struct PathMatchCandidateSet {
     pub include_ignored: bool,
     pub include_root_name: bool,
     pub candidates: Candidates,
+    /// Paths matching these globs (or inside matching directories) are dropped
+    /// from fuzzy-match candidates, per the `file_search_exclusions` setting.
+    pub file_search_exclusions: PathMatcher,
 }
 
 pub enum Candidates {
@@ -6574,6 +6577,11 @@ impl<'a> fuzzy_nucleo::PathMatchCandidateSet<'a> for PathMatchCandidateSet {
                 Candidates::Entries => self.snapshot.entries(self.include_ignored, start),
             },
         }
+    }
+    fn include_candidate(&self, candidate: &fuzzy_nucleo::PathMatchCandidate<'a>) -> bool {
+        !self
+            .file_search_exclusions
+            .matches_path_or_ancestor(candidate.path)
     }
 }
 
