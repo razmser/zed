@@ -307,6 +307,7 @@ message SearchQuery {
   bool include_ignored = 8;
   string files_to_include_legacy = 6;
   string files_to_exclude_legacy = 7;
+  repeated string file_search_exclusions = 12;
 }
 
 message FindSearchCandidates {

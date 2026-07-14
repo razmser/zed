@@ -470,7 +470,11 @@ impl Search {
                         }
                         snapshot = worktree.read_with(cx, |this, _| this.snapshot());
                     }
-                    let query_has_includes = !query.files_to_include().is_empty();
+                    let query_has_includes = query.has_include_filter();
+                    // The requester resolves its own `file_search_exclusions` and sends them with
+                    // remote queries; a local in-process search carries none and defers to this
+                    // worktree's own settings.
+                    let requester_search_exclusions = query.file_search_exclusions().cloned();
                     let tx = tx.clone();
                     let results = results.clone();
 
@@ -481,9 +485,24 @@ impl Search {
                                 // an explicit Include glob in the query overrides it. When the
                                 // query supplies includes, handle_scan_path's match_path is the
                                 // sole arbiter of what's searched, so the setting is bypassed.
-                                if !query_has_includes
-                                    && worktree_settings.is_path_search_excluded(&entry.path)
-                                {
+                                //
+                                // For a single-file worktree the root file's `path` is empty and
+                                // its name lives in the root name, so match the exclusions against
+                                // the root name in that case (otherwise a filename glob like `*.rs`
+                                // could never exclude it).
+                                let search_relative_path = if entry.path.is_empty() {
+                                    snapshot.root_name()
+                                } else {
+                                    &entry.path
+                                };
+                                let is_search_excluded = match &requester_search_exclusions {
+                                    Some(matcher) => {
+                                        matcher.matches_path_or_ancestor(search_relative_path)
+                                    }
+                                    None => worktree_settings
+                                        .is_path_search_excluded(search_relative_path),
+                                };
+                                if !query_has_includes && is_search_excluded {
                                     continue;
                                 }
                                 let (should_scan_tx, should_scan_rx) = oneshot::channel();
@@ -936,10 +955,14 @@ impl PathInclusionMatcher {
         }
         // Files under a search-excluded directory are dropped from the
         // candidate walk anyway (unless a query Include overrides the
-        // setting), so don't pay for scanning the directory either.
-        if self.query.files_to_include().is_empty()
-            && worktree_settings.is_path_search_excluded(&entry.path)
-        {
+        // setting), so don't pay for scanning the directory either. Prefer the
+        // requester's exclusions (present on remote queries) over this
+        // worktree's own settings, matching the candidate walk above.
+        let is_search_excluded = match self.query.file_search_exclusions() {
+            Some(matcher) => matcher.matches_path_or_ancestor(&entry.path),
+            None => worktree_settings.is_path_search_excluded(&entry.path),
+        };
+        if !self.query.has_include_filter() && is_search_excluded {
             return false;
         }
         if !self.query.filters_path() {

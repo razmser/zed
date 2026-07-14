@@ -43,6 +43,11 @@ pub struct SearchInputs {
     files_to_exclude: PathMatcher,
     match_full_paths: bool,
     buffers: Option<Vec<Entity<Buffer>>>,
+    /// The `file_search_exclusions` of the machine that issued the search, resolved by the
+    /// requester so they travel to whichever machine actually walks the worktrees. `None` marks an
+    /// in-process local search that never crossed a process boundary; those fall back to the
+    /// executing worktree's own settings instead (see `project_search`).
+    file_search_exclusions: Option<PathMatcher>,
 }
 
 pub type LineHint = u32;
@@ -56,6 +61,9 @@ impl SearchInputs {
     }
     pub fn files_to_exclude(&self) -> &PathMatcher {
         &self.files_to_exclude
+    }
+    pub fn file_search_exclusions(&self) -> Option<&PathMatcher> {
+        self.file_search_exclusions.as_ref()
     }
     pub fn buffers(&self) -> &Option<Vec<Entity<Buffer>>> {
         &self.buffers
@@ -131,6 +139,7 @@ impl SearchQuery {
             files_to_include,
             match_full_paths,
             buffers,
+            file_search_exclusions: None,
         };
         Ok(Self::Text {
             search,
@@ -165,6 +174,7 @@ impl SearchQuery {
             files_to_exclude,
             match_full_paths,
             buffers,
+            file_search_exclusions: None,
         };
         Self::build_regex(
             query,
@@ -200,6 +210,7 @@ impl SearchQuery {
             files_to_exclude,
             match_full_paths,
             buffers,
+            file_search_exclusions: None,
         };
         Self::build_regex(
             regex::escape(&query),
@@ -330,7 +341,11 @@ impl SearchQuery {
             message.files_to_exclude
         };
 
-        if message.regex {
+        // A query only reaches `from_proto` when a remote requester dispatched it, so the
+        // requester's exclusions are always authoritative here (even when empty): the executing
+        // side must not fall back to its own settings.
+        let file_search_exclusions = PathMatcher::new(message.file_search_exclusions, path_style)?;
+        let query = if message.regex {
             Self::regex(
                 message.query,
                 message.whole_word,
@@ -341,7 +356,7 @@ impl SearchQuery {
                 PathMatcher::new(files_to_exclude, path_style)?,
                 message.match_full_paths,
                 None, // search opened only don't need search remote
-            )
+            )?
         } else {
             Self::text(
                 message.query,
@@ -352,8 +367,9 @@ impl SearchQuery {
                 PathMatcher::new(files_to_exclude, path_style)?,
                 message.match_full_paths,
                 None, // search opened only don't need search remote
-            )
-        }
+            )?
+        };
+        Ok(query.with_file_search_exclusions(file_search_exclusions))
     }
 
     pub fn with_replacement(mut self, new_replacement: String) -> Self {
@@ -384,6 +400,10 @@ impl SearchQuery {
             files_to_include: files_to_include.clone().map(ToOwned::to_owned).collect(),
             files_to_exclude: files_to_exclude.clone().map(ToOwned::to_owned).collect(),
             match_full_paths: self.match_full_paths(),
+            file_search_exclusions: self
+                .file_search_exclusions()
+                .map(|matcher| matcher.sources().map(ToOwned::to_owned).collect())
+                .unwrap_or_default(),
             // Populate legacy fields for backwards compatibility
             files_to_include_legacy: files_to_include.join(","),
             files_to_exclude_legacy: files_to_exclude.join(","),
@@ -665,6 +685,32 @@ impl SearchQuery {
             && self.files_to_include().sources().next().is_none())
     }
 
+    /// Whether the query has an effective Include filter. Mirrors the criterion used by
+    /// `match_path`: only path-shaped globs (those retained in `sources`) act as filters, so an
+    /// unusable glob such as an absolute path does not count as an include. Callers that gate on
+    /// "does an Include override apply here" must use this rather than the `PathMatcher`'s glob
+    /// set, or an absolute path in the Include field would appear to be an include while
+    /// `match_path` ignores it.
+    pub fn has_include_filter(&self) -> bool {
+        self.files_to_include().sources().next().is_some()
+    }
+
+    /// The requester's `file_search_exclusions`, or `None` for an in-process local search that
+    /// should defer to the executing worktree's own settings.
+    pub fn file_search_exclusions(&self) -> Option<&PathMatcher> {
+        self.as_inner().file_search_exclusions()
+    }
+
+    /// Attach the requester's resolved `file_search_exclusions` so they travel to the machine that
+    /// walks the worktrees (a remote host or SSH server).
+    pub fn with_file_search_exclusions(mut self, exclusions: PathMatcher) -> Self {
+        let inner = match &mut self {
+            Self::Text { inner, .. } | Self::Regex { inner, .. } => inner,
+        };
+        inner.file_search_exclusions = Some(exclusions);
+        self
+    }
+
     pub fn match_full_paths(&self) -> bool {
         self.as_inner().match_full_paths
     }
@@ -754,5 +800,52 @@ impl SearchQuery {
             }
         }
         matches
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_query(files_to_include: PathMatcher) -> SearchQuery {
+        SearchQuery::text(
+            "needle",
+            false,
+            true,
+            false,
+            files_to_include,
+            PathMatcher::default(),
+            false,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn has_include_filter_ignores_ineffective_globs() {
+        let relative = text_query(PathMatcher::new(["target/**"], PathStyle::Posix).unwrap());
+        assert!(relative.has_include_filter());
+
+        // An absolute path cannot be parsed into a relative glob, so it lives only in the glob set
+        // and not in `sources`; it must not count as an effective include filter (matching how
+        // `match_path` treats it), otherwise it would spuriously bypass `file_search_exclusions`.
+        let absolute = text_query(PathMatcher::new(["/abs/target/**"], PathStyle::Posix).unwrap());
+        assert!(!absolute.has_include_filter());
+    }
+
+    #[test]
+    fn file_search_exclusions_survive_proto_round_trip() {
+        let exclusions = PathMatcher::new(["target", "**/node_modules"], PathStyle::Posix).unwrap();
+        let query = text_query(PathMatcher::default())
+            .with_file_search_exclusions(exclusions.clone());
+        assert_eq!(query.file_search_exclusions(), Some(&exclusions));
+
+        // The requester's exclusions must reach a remote host verbatim.
+        let round_tripped = SearchQuery::from_proto(query.to_proto(), PathStyle::Posix).unwrap();
+        assert_eq!(round_tripped.file_search_exclusions(), Some(&exclusions));
+
+        // A query that never attached exclusions stays `None`, so an in-process local search falls
+        // back to the executing worktree's own settings rather than "exclude nothing".
+        assert_eq!(text_query(PathMatcher::default()).file_search_exclusions(), None);
     }
 }

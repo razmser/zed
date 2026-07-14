@@ -412,6 +412,63 @@ async fn test_remote_project_search(cx: &mut TestAppContext, server_cx: &mut Tes
 }
 
 #[gpui::test]
+async fn test_remote_project_search_file_search_exclusions(
+    cx: &mut TestAppContext,
+    server_cx: &mut TestAppContext,
+) {
+    let fs = FakeFs::new(server_cx.executor());
+    fs.insert_tree(
+        path!("/code"),
+        json!({
+            "project1": {
+                ".git": {},
+                "README.md": "needle",
+                "src": { "lib.rs": "needle" },
+            },
+        }),
+    )
+    .await;
+
+    let (project, _headless) = init_test(&fs, cx, server_cx).await;
+    project
+        .update(cx, |project, cx| {
+            project.find_or_create_worktree(path!("/code/project1"), true, cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    // The requester (client) excludes `src`; the search runs on the headless server, so this only
+    // takes effect if the client's exclusions travel with the query.
+    cx.update_global::<SettingsStore, _>(|store, cx| {
+        store.update_user_settings(cx, |settings| {
+            settings.project.worktree.file_search_exclusions = Some(vec!["src".to_string()]);
+        });
+    });
+    // The server excludes `README.md` via its own settings; under the requester-authoritative
+    // model the server must ignore this and honor only the client's exclusions.
+    server_cx.update_global::<SettingsStore, _>(|store, cx| {
+        store.update_user_settings(cx, |settings| {
+            settings.project.worktree.file_search_exclusions = Some(vec!["README.md".to_string()]);
+        });
+    });
+    cx.run_until_parked();
+    server_cx.run_until_parked();
+
+    // Only README.md remains: the client's `src` exclusion crossed the wire and was applied, while
+    // the server's own `README.md` exclusion was ignored.
+    do_search_and_assert(
+        &project,
+        "needle",
+        Default::default(),
+        false,
+        &[path!("project1/README.md")],
+        cx.clone(),
+    )
+    .await;
+}
+
+#[gpui::test]
 async fn test_remote_project_search_single_cpu(
     cx: &mut TestAppContext,
     server_cx: &mut TestAppContext,

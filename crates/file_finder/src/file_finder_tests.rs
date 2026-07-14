@@ -2794,6 +2794,80 @@ async fn test_file_search_exclusions_keep_history(cx: &mut gpui::TestAppContext)
 }
 
 #[gpui::test]
+async fn test_file_search_exclusions_single_file_worktree(cx: &mut gpui::TestAppContext) {
+    let app_state = init_test(cx);
+    app_state
+        .fs
+        .as_fake()
+        .insert_tree("/root", json!({ "the-parent-dir": { "the-file.rs": "" } }))
+        .await;
+    // A worktree whose root is a single file: its candidate path is empty and the filename lives
+    // in the root name, so exclusions must be matched against the root name.
+    let project = Project::test(
+        app_state.fs.clone(),
+        ["/root/the-parent-dir/the-file.rs".as_ref()],
+        cx,
+    )
+    .await;
+    let (picker, _workspace, cx) = build_find_picker(project, cx);
+
+    let search_matches = |picker: &Picker<FileFinderDelegate>| {
+        collect_search_matches(picker)
+            .search
+            .iter()
+            .map(|path| path.display(PathStyle::local()).into_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // A filename glob excludes the single-file worktree root.
+    cx.update(|_, cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_search_exclusions = Some(vec!["*.rs".to_string()]);
+            });
+        })
+    });
+    cx.run_until_parked();
+    picker
+        .update_in(cx, |picker, window, cx| {
+            picker
+                .delegate
+                .spawn_search(test_path_position("the-file"), window, cx)
+        })
+        .await;
+    picker.update(cx, |picker, _| {
+        assert!(
+            search_matches(picker).is_empty(),
+            "a filename glob should exclude a single-file worktree root from the finder"
+        );
+    });
+
+    // A non-matching glob leaves it findable.
+    cx.update(|_, cx| {
+        cx.update_global::<SettingsStore, _>(|store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.worktree.file_search_exclusions = Some(vec!["*.md".to_string()]);
+            });
+        })
+    });
+    cx.run_until_parked();
+    picker
+        .update_in(cx, |picker, window, cx| {
+            picker
+                .delegate
+                .spawn_search(test_path_position("the-file"), window, cx)
+        })
+        .await;
+    picker.update(cx, |picker, _| {
+        assert_eq!(
+            search_matches(picker),
+            vec!["the-file.rs".to_string()],
+            "a non-matching glob leaves the single-file worktree findable"
+        );
+    });
+}
+
+#[gpui::test]
 async fn test_single_file_search_result_split_open(cx: &mut gpui::TestAppContext) {
     let app_state = init_test(cx);
     app_state

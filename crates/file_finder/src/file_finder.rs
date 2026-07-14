@@ -1043,8 +1043,10 @@ impl FileFinderDelegate {
             .map(|worktree| {
                 let worktree = worktree.read(cx);
                 let snapshot = worktree.snapshot();
-                // Resolved via the settings store rather than the worktree so
-                // that remote (SSH, collab) worktrees are covered too.
+                // The finder runs on the machine that issued the query, so resolving from this
+                // machine's settings store applies the requester's own exclusions even for remote
+                // (SSH, collab) worktrees. Project-wide text search matches this by sending the
+                // requester's exclusions along with the query (see `Project::search_impl`).
                 let settings_location = SettingsLocation {
                     worktree_id: snapshot.id(),
                     path: RelPath::empty(),

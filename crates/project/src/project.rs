@@ -4616,7 +4616,11 @@ impl Project {
         })
     }
 
-    fn search_impl(&mut self, query: SearchQuery, cx: &mut Context<Self>) -> SearchResultsHandle {
+    fn search_impl(
+        &mut self,
+        mut query: SearchQuery,
+        cx: &mut Context<Self>,
+    ) -> SearchResultsHandle {
         let client: Option<(AnyProtoClient, _)> = if let Some(ssh_client) = &self.remote_client {
             Some((ssh_client.read(cx).proto_client(), 0))
         } else if let Some(remote_id) = self.remote_id() {
@@ -4634,12 +4638,21 @@ impl Project {
             )
         } else {
             match client {
-                Some((client, remote_id)) => project_search::Search::remote(
-                    self.buffer_store.clone(),
-                    self.worktree_store.clone(),
-                    project_search::Search::MAX_SEARCH_RESULT_FILES + 1,
-                    (client, remote_id, self.remotely_created_models.clone()),
-                ),
+                Some((client, remote_id)) => {
+                    // The remote host walks the worktrees, so resolve *this* machine's
+                    // `file_search_exclusions` here and send them with the query. Without this the
+                    // host would apply its own settings (or none), diverging from the local file
+                    // finder, which already uses the requester's value.
+                    let file_search_exclusions =
+                        WorktreeSettings::get(None, cx).file_search_exclusions.clone();
+                    query = query.with_file_search_exclusions(file_search_exclusions);
+                    project_search::Search::remote(
+                        self.buffer_store.clone(),
+                        self.worktree_store.clone(),
+                        project_search::Search::MAX_SEARCH_RESULT_FILES + 1,
+                        (client, remote_id, self.remotely_created_models.clone()),
+                    )
+                }
                 None => project_search::Search::local(
                     self.fs.clone(),
                     self.buffer_store.clone(),
@@ -6579,9 +6592,18 @@ impl<'a> fuzzy_nucleo::PathMatchCandidateSet<'a> for PathMatchCandidateSet {
         }
     }
     fn include_candidate(&self, candidate: &fuzzy_nucleo::PathMatchCandidate<'a>) -> bool {
-        !self
-            .file_search_exclusions
-            .matches_path_or_ancestor(candidate.path)
+        if self.file_search_exclusions.is_empty() {
+            return true;
+        }
+        // For a single-file worktree the candidate path is empty and the filename lives in the
+        // root name, so match the exclusions against the root name in that case (otherwise a
+        // filename glob like `*.rs` could never exclude it).
+        let path = if self.snapshot.root_entry().is_some_and(|entry| entry.is_file()) {
+            self.snapshot.root_name()
+        } else {
+            candidate.path
+        };
+        !self.file_search_exclusions.matches_path_or_ancestor(path)
     }
 }
 

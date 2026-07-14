@@ -8468,6 +8468,21 @@ async fn test_search_with_file_search_exclusions(cx: &mut gpui::TestAppContext) 
         "a query Include restores a search-excluded path"
     );
 
+    // An absolute path in the Include field cannot become a relative glob, so it lives only in the
+    // matcher's glob set and not its `sources`. `match_path` therefore treats it as "no include
+    // filter", so it must NOT be mistaken for an effective Include that bypasses the exclusions.
+    #[cfg(not(windows))]
+    assert_eq!(
+        search(&project, query(&["/dir/target/**"], &[]), cx)
+            .await
+            .unwrap(),
+        HashMap::from_iter([
+            (path!("dir/src/main.rs").to_string(), vec![0..6]),
+            (path!("dir/readme.md").to_string(), vec![0..6]),
+        ]),
+        "an absolute-path Include is not an effective include and must not bypass the exclusions"
+    );
+
     // A query Exclude still wins over a query Include on a restored path.
     assert_eq!(
         search(&project, query(&["target/**"], &["target/debug/**"]), cx)
@@ -8594,6 +8609,48 @@ async fn test_search_with_invalid_file_search_exclusions_glob(
             (path!("dir/target/build.rs").to_string(), vec![0..6]),
         ]),
         "an invalid glob is logged and skipped, so search still works"
+    );
+}
+
+#[gpui::test]
+async fn test_search_file_search_exclusions_single_file_worktree(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(path!("/dir"), json!({ "main.rs": "needle" }))
+        .await;
+    // A worktree whose root is a single file: its root entry has an empty relative path and the
+    // filename lives in the root name, so exclusions must be matched against the root name.
+    let project = Project::test(fs.clone(), [path!("/dir/main.rs").as_ref()], cx).await;
+
+    let plain_query = || {
+        SearchQuery::text(
+            "needle",
+            false,
+            true,
+            false,
+            Default::default(),
+            Default::default(),
+            false,
+            None,
+        )
+        .unwrap()
+    };
+
+    // A filename glob excludes the single-file root.
+    set_file_search_exclusions(cx, &["*.rs"]);
+    assert_eq!(
+        search(&project, plain_query(), cx).await.unwrap(),
+        HashMap::default(),
+        "a filename glob should exclude a single-file worktree root from search"
+    );
+
+    // A non-matching glob leaves it searchable.
+    set_file_search_exclusions(cx, &["*.md"]);
+    assert_eq!(
+        search(&project, plain_query(), cx).await.unwrap(),
+        HashMap::from_iter([("main.rs".to_string(), vec![0..6])]),
+        "a non-matching glob leaves the single-file worktree searchable"
     );
 }
 
